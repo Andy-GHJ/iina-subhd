@@ -27,6 +27,48 @@ test('a real challenge retries the mirror without changing saved preferences', a
   assert.equal(app.calls.filter(c => c.type === 'get').length, 2);
 });
 
+test('official badges and named groups appear before language and format in native rows', async t => {
+  const app = runtime({ get: () => ({ statusCode: 200, text:
+    card({ id: 'Official', source: '官方字幕' }) +
+    card({ id: 'Group', group: 'CMCT字幕组' }) +
+    card({ id: 'Both', source: '官方字幕', group: 'F.I.X字幕侠', groupURL: 'https://subhd.me/zu/28' }),
+  }) });
+  t.after(app.cleanup);
+  const items = await app.provider.search();
+  assert.deepEqual(Array.from(items, item => app.provider.description(item).left), [
+    '官方字幕 · 中英双语 · SRT',
+    'CMCT字幕组 · 中英双语 · SRT',
+    '官方字幕 · F.I.X字幕侠 · 中英双语 · SRT',
+  ]);
+  assert.equal(app.provider.description(items[1]).right, '下载 1234 次');
+  assert.equal(app.calls.length, 1, 'source labels must not require detail-page requests');
+});
+
+test('other or missing sources stay visible without labels inferred from release titles', async t => {
+  const app = runtime({ get: () => ({ statusCode: 200, text:
+    card({ id: 'Other', title: 'Kill.Bill.Vol.2.2004.官方字幕.CMCT字幕组' }) +
+    card({ id: 'Original', source: '原创翻译' }) +
+    card({ id: 'Missing', source: '' }),
+  }) });
+  t.after(app.cleanup);
+  const items = await app.provider.search();
+  assert.equal(items.length, 3);
+  for (const item of items) assert.equal(app.provider.description(item).left, '中英双语 · SRT');
+});
+
+test('group names are decoded and external links cannot masquerade as SubHD groups', async t => {
+  const app = runtime({ get: () => ({ statusCode: 200, text:
+    card({ id: 'Named', group: '<strong>YYeTs</strong>&amp;字幕组', groupURL: '/zu/14' }) +
+    card({ id: 'External', group: '官方字幕', groupURL: 'https://evil.example/zu/14' }) +
+    card({ id: 'Uploader', group: '字幕组上传者', groupURL: '/u/14' }),
+  }) });
+  t.after(app.cleanup);
+  const items = await app.provider.search();
+  assert.equal(app.provider.description(items[0]).left, 'YYeTs&字幕组 · 中英双语 · SRT');
+  assert.equal(app.provider.description(items[1]).left, '中英双语 · SRT');
+  assert.equal(app.provider.description(items[2]).left, '中英双语 · SRT');
+});
+
 test('clearing the backup site actually disables it and HTTP errors remain readable', async t => {
   const app = runtime({ get: () => Promise.reject({ statusCode: 503, reason: 'Service Unavailable' }) });
   t.after(app.cleanup);

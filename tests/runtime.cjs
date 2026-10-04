@@ -79,9 +79,14 @@ function runtime(options = {}) {
   return { provider, calls, iina, root, cleanup: () => fs.rmSync(root, { recursive: true, force: true }) };
 }
 
-function card({ id = 'Ab12', title = 'Kill.Bill.Vol.2.2004.BluRay', language = '简体 英语 双语', format = 'SRT', downloads = 1234 } = {}) {
-  return `<div class="bg-white mb-4"><div><div class="view-text"><a href="/a/${id}">${title}</a></div>
-    <div>${language} ${format}</div><svg class="bi bi-download"></svg><span>${downloads}</span></div></div>`;
+function card({ id = 'Ab12', title = 'Kill.Bill.Vol.2.2004.BluRay', language = '简体 英语 双语', format = 'SRT', downloads = 1234,
+  source = '其他来源', group = '', groupURL = '/zu/44' } = {}) {
+  return `<div class="bg-white mb-4"><div>
+    ${group ? `<div class="float-end"><a href="${groupURL}">${group}</a></div>` : ''}
+    <div class="view-text"><a href="/a/${id}">${title}</a></div>
+    <div class="text-truncate py-2 f11"><span class="rounded p-1 me-1 text-white">${source}</span>
+    <span class="p-1 fw-bold">${language}</span><span class="p-1 text-secondary">${format}</span></div>
+    <svg class="bi bi-download"></svg><span>${downloads}</span></div></div>`;
 }
 
 module.exports = { runtime, nativeExec, card, SRT };

@@ -1,7 +1,7 @@
 {
   "name": "SubHD 中文字幕",
   "identifier": "com.codex.iina.subhd",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "在 IINA 在线字幕搜索中查找并加载 SubHD 中文字幕。",
   "author": {
     "name": "Andy-GHJ",
@@ -44,5 +44,5 @@
     "fallbackBaseURL": "https://subhd.me"
   },
   "ghRepo": "Andy-GHJ/iina-subhd",
-  "ghVersion": 1
+  "ghVersion": 2
 }

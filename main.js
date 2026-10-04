@@ -237,10 +237,38 @@
         language: language,
         formats: extensions,
         downloads: downloads,
+        source: extractSource(card),
       });
     }
 
     return results;
+  }
+
+  function extractSource(card) {
+    var sources = [];
+    // Source badges belong to the metadata row; a release title mentioning
+    // "official" is not evidence that SubHD marked it as an official subtitle.
+    var metadata = /<div\b(?=[^>]*\bclass\s*=\s*["'][^"']*\btext-truncate\b)[^>]*>([\s\S]*?)<\/div>/i.exec(card);
+    if (metadata) {
+      var badges = /<span\b(?=[^>]*\bclass\s*=\s*["'][^"']*\brounded\b)[^>]*>([\s\S]*?)<\/span>/gi;
+      var badge;
+      while ((badge = badges.exec(metadata[1]))) {
+        if (stripTags(badge[1]) === "官方字幕") sources.push("官方字幕");
+      }
+    }
+
+    // SubHD can show a /zu/<id> group even when its source badge says "other".
+    var anchors = /<a\b[^>]*>([\s\S]*?)<\/a>/gi;
+    var anchor;
+    while ((anchor = anchors.exec(card))) {
+      var href = getAttribute(anchor[0].slice(0, anchor[0].indexOf(">") + 1), "href");
+      try {
+        if (!/^\/zu\/\d+\/?(?:[?#].*)?$/.test(sitePath(href))) continue;
+      } catch (_) { continue; }
+      var group = stripTags(anchor[1].replace(/<[^>]*>/g, ""));
+      if (group && sources.indexOf(group) === -1) sources.push(group);
+    }
+    return sources.join(" · ");
   }
 
   function cleanQuery(name) {
@@ -595,7 +623,7 @@
         : "下载 " + data.downloads + " 次";
       return {
         name: data.title || "SubHD 字幕",
-        left: data.language + " · " + format,
+        left: (data.source ? data.source + " · " : "") + data.language + " · " + format,
         right: downloads,
       };
     },
