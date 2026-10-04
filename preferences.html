@@ -1,0 +1,33 @@
+<body>
+  <div class="pref-section">
+    <label for="base-url">SubHD 主站</label>
+    <div style="margin-top: 4px">
+      <input
+        id="base-url"
+        type="text"
+        data-pref-key="baseURL"
+        style="width: 100%"
+        placeholder="https://subhd.tv"
+      />
+    </div>
+    <p class="small secondary pref-help">
+      默认使用 https://subhd.tv，也可填写 https://subhd.me 等允许的 SubHD 镜像域名。
+    </p>
+  </div>
+
+  <div class="pref-section">
+    <label for="fallback-url">备用站点</label>
+    <div style="margin-top: 4px">
+      <input
+        id="fallback-url"
+        type="text"
+        data-pref-key="fallbackBaseURL"
+        style="width: 100%"
+        placeholder="https://subhd.me"
+      />
+    </div>
+    <p class="small secondary pref-help">
+      主站无法访问或下载失败时，插件会尝试备用站点。留空可关闭备用站点。
+    </p>
+  </div>
+</body>

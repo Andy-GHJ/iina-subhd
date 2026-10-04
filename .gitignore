@@ -1,0 +1,7 @@
+.DS_Store
+*.iinaplgz
+artifacts/
+node_modules/
+
+# Local bundles from before the repository used a root-level IINA manifest.
+SubHD.iinaplugin/

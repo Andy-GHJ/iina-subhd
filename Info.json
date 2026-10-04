@@ -1,0 +1,48 @@
+{
+  "name": "SubHD 中文字幕",
+  "identifier": "com.codex.iina.subhd",
+  "version": "0.2.0",
+  "description": "在 IINA 在线字幕搜索中查找并加载 SubHD 中文字幕。",
+  "author": {
+    "name": "Andy-GHJ",
+    "url": "https://github.com/Andy-GHJ/iina-subhd"
+  },
+  "entry": "main.js",
+  "permissions": [
+    "network-request",
+    "file-system"
+  ],
+  "allowedDomains": [
+    "subhd.tv",
+    "www.subhd.tv",
+    "subhd.me",
+    "www.subhd.me",
+    "subhdtw.com",
+    "www.subhdtw.com",
+    "subhd.one",
+    "www.subhd.one",
+    "subhd.top",
+    "www.subhd.top",
+    "subhd.cc",
+    "www.subhd.cc",
+    "dl.subhd.tv",
+    "dl.subhd.me",
+    "dl.subhdtw.com",
+    "dl.subhd.one",
+    "dl.subhd.top",
+    "dl.subhd.cc"
+  ],
+  "subtitleProviders": [
+    {
+      "id": "subhd-cn",
+      "name": "SubHD 中文字幕"
+    }
+  ],
+  "preferencesPage": "preferences.html",
+  "preferenceDefaults": {
+    "baseURL": "https://subhd.tv",
+    "fallbackBaseURL": "https://subhd.me"
+  },
+  "ghRepo": "Andy-GHJ/iina-subhd",
+  "ghVersion": 1
+}
