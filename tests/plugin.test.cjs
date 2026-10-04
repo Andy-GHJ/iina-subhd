@@ -14,7 +14,7 @@ test('normal Cloudflare email protection does not block native search results', 
   const desc = app.provider.description(items[0]);
   assert.equal(desc.left, '中英双语 · SRT');
   assert.equal(desc.right, '下载 1234 次');
-  assert.equal(app.calls[0].url, 'https://subhd.tv/search/Kill%20Bill%20Vol%202');
+  assert.equal(app.calls[0].url, 'https://subhd.tv/search/Kill%20Bill%20Vol%202%202004');
 });
 
 test('a real challenge retries the mirror without changing saved preferences', async t => {
@@ -85,6 +85,112 @@ test('wrong volume and English-only rows are filtered or ranked below matching r
   const items = await app.provider.search();
   assert.equal(items.length, 2);
   assert.equal(items[0].data.detailPath, '/a/Ab12');
+});
+
+test('all search pages are collected, deduplicated and ranked together', async t => {
+  const links = (...pages) => pages.map(page => `<a class="page-link" href="/search/Kill%20Bill%20Vol%202%202004/${page}">${page}</a>`).join('');
+  const app = runtime({ get: url => ({ statusCode: 200, text: url.endsWith('/3')
+    ? card({ id: 'Third', title: 'Kill.Bill.Vol.2.2004', source: '官方字幕' }) + links(2, 3)
+    : url.endsWith('/2') ? card({ id: 'Second', title: 'Kill.Bill.Vol.2.2004', group: 'CMCT字幕组' }) + card({ id: 'First', title: 'Kill.Bill.Vol.1.2003' }) + links(1, 2, 3)
+    : card({ id: 'First', title: 'Kill.Bill.Vol.1.2003' }) + links(1, 2),
+  }) });
+  t.after(app.cleanup);
+  const items = await app.provider.search();
+  assert.deepEqual(Array.from(items, item => item.data.detailPath), ['/a/Second', '/a/Third', '/a/First']);
+  assert.equal(app.provider.description(items[1]).left, '官方字幕 · 中英双语 · SRT');
+  assert.equal(app.calls.length, 3);
+});
+
+test('pagination continues past foreign-only pages and ignores unrelated or external links', async t => {
+  const app = runtime({ get: url => ({ statusCode: 200, text: url.endsWith('/2') ? card() :
+    card({ language: '西班牙语' }) +
+    '<a class="page-link" href="https://evil.example/search/Kill%20Bill%20Vol%202%202004/2">2</a>' +
+    '<a class="page-link" href="/search/Other/2">2</a>' +
+    '<a class="page-link" href="/search/Kill%20Bill%20Vol%202%202004/1">1</a>' +
+    '<a class="page-link" href="/search/Kill%20Bill%20Vol%202%202004/2">2</a>',
+  }) });
+  t.after(app.cleanup);
+  assert.equal((await app.provider.search()).length, 1);
+  assert.deepEqual(app.calls.map(call => call.url), [
+    'https://subhd.tv/search/Kill%20Bill%20Vol%202%202004',
+    'https://subhd.tv/search/Kill%20Bill%20Vol%202%202004/2',
+  ]);
+});
+
+test('a later page failure retries the whole search at the configured mirror', async t => {
+  const app = runtime({ preferences: { fallbackBaseURL: 'https://subhd.me' }, get: url => {
+    if (url.startsWith('https://subhd.me')) return { statusCode: 200, text: card({ id: 'Mirror' }) };
+    if (url.endsWith('/2')) return { statusCode: 503, text: '' };
+    return { statusCode: 200, text: card() + '<a class="page-link" href="/search/Kill%20Bill%20Vol%202%202004/2">2</a>' };
+  } });
+  t.after(app.cleanup);
+  const items = await app.provider.search();
+  assert.equal(items[0].data.detailPath, '/a/Mirror');
+  assert.equal(app.calls.length, 3);
+});
+
+test('only explicit Chinese language metadata admits a row, regardless of its title or source', async t => {
+  const app = runtime({ get: () => ({ statusCode: 200, text:
+    card({ id: 'Spanish', language: '西班牙语', title: '中文字幕 Spanish.srt' }) +
+    card({ id: 'English', language: 'English', title: '中文字幕 English.srt' }) +
+    card({ id: 'OtherBilingual', language: '西班牙语 英语 双语', group: '中文字幕组' }) +
+    card({ id: 'Unknown', language: '', source: '中文字幕' }) +
+    card({ id: 'Missing', language: '英语' }).replace('text-truncate', 'missing-metadata') +
+    card({ id: 'Simplified', language: '简体' }) +
+    card({ id: 'Traditional', language: '繁體' }) +
+    card({ id: 'Chinese', language: '中文' }) +
+    card({ id: 'ChineseEnglish', language: 'Chinese English Bilingual' }) +
+    card({ id: 'ChineseJapanese', language: '简体 日语 双语' }),
+  }) });
+  t.after(app.cleanup);
+  const items = await app.provider.search();
+  assert.deepEqual(Array.from(items, item => item.data.detailPath), [
+    '/a/Simplified', '/a/Traditional', '/a/Chinese', '/a/ChineseEnglish', '/a/ChineseJapanese',
+  ]);
+  assert.deepEqual(Array.from(items, item => item.data.language), [
+    '简体中文', '繁体中文', '中文字幕', '中英双语', '简体中文',
+  ]);
+});
+
+test('numeric titles keep their title number while the final release year drives ranking', async t => {
+  for (const [name, query] of [
+    ['Blade.Runner.2049.2017.1080p.mkv', 'Blade Runner 2049'],
+    ['Blade_Runner_2049_2017_1080p_WEB-DL.mkv', 'Blade Runner 2049'],
+    ['Blade Runner 2049 (2017) 1080p.mkv', 'Blade Runner 2049'],
+    ['2001.A.Space.Odyssey.1968.1080p.mkv', '2001 A Space Odyssey'],
+    ['Wonder.Woman.1984.2020.1080p.mkv', 'Wonder Woman 1984'],
+    ['Blade.Runner.2049.1080p.mkv', 'Blade Runner 2049'],
+    ['Class.of.1999.1080p.mkv', 'Class of 1999'],
+    ['1917.1080p.mkv', '1917'],
+  ]) {
+    const app = runtime({ status: { url: 'file:///tmp/' + name }, get: () => ({ statusCode: 200, text:
+      card({ id: 'TitleNumber', title: 'Blade.Runner.2049.2049' }) +
+      card({ id: 'ReleaseYear', title: 'Blade.Runner.2049.2017' }),
+    }) });
+    t.after(app.cleanup);
+    const items = await app.provider.search();
+    assert.equal(decodeURIComponent(app.calls[0].url.split('/search/')[1]), query, name);
+    if (name.includes('2049.2017')) assert.equal(items[0].data.detailPath, '/a/ReleaseYear');
+  }
+});
+
+test('a full numeric movie title ranks above a related film released in the same year', async t => {
+  const app = runtime({ status: { url: 'file:///tmp/Blade.Runner.2049.2017.1080p.mkv' }, get: () => ({ statusCode: 200, text:
+    card({ id: 'Short', title: 'Blade.Runner.Black.Out.2022.2017' }) +
+    card({ id: 'Original', title: 'Blade.Runner.1982' }) +
+    card({ id: 'Movie', title: 'Blade.Runner.2049.2017' }),
+  }) });
+  t.after(app.cleanup);
+  const items = await app.provider.search();
+  assert.deepEqual(Array.from(items, item => item.data.detailPath), ['/a/Movie', '/a/Short', '/a/Original']);
+  assert.equal(decodeURIComponent(app.calls[0].url.split('/search/')[1]), 'Blade Runner 2049');
+});
+
+test('ambiguous release years fall back to the title after a precise search returns nothing', async t => {
+  const app = runtime({ get: url => ({ statusCode: 200, text: url.endsWith('/Kill%20Bill%20Vol%202') ? card() : '' }) });
+  t.after(app.cleanup);
+  assert.equal((await app.provider.search()).length, 1);
+  assert.deepEqual(app.calls.map(call => decodeURIComponent(call.url.split('/search/')[1])), ['Kill Bill Vol 2 2004', 'Kill Bill Vol 2']);
 });
 
 test('episode identifiers and numeric movie titles survive filename cleanup', async t => {
@@ -160,4 +266,37 @@ test('compressed subtitles keep original bytes and handle brackets and shell pun
   const paths = await app.provider.download(item);
   assert.deepEqual(fs.readFileSync(paths[0]), bytes);
   assert.equal(fs.readdirSync(path.dirname(paths[0])).filter(name => name.endsWith('.srt')).length, 1);
+});
+
+test('archive episode matching compares season and episode numbers across separators and padding', async t => {
+  for (const [video, member] of [
+    ['Show.S01.E02.1080p.mkv', 'Show.S01E02.chs.srt'],
+    ['Show.S01E02.1080p.mkv', 'Show.S1-E2.chs.srt'],
+    ['Show.S1 E2.1080p.mkv', 'Show.S01_E002.chs.srt'],
+  ]) {
+    const app = runtime({ status: { url: 'file:///tmp/' + encodeURIComponent(video) }, downloadURL: 'https://dl.subhd.me/episodes.zip' });
+    t.after(app.cleanup);
+    const source = path.join(app.root, 'episodes');
+    fs.mkdirSync(source);
+    fs.writeFileSync(path.join(source, 'Show.S01E01.chs.srt'), SRT.replace('中文字幕', '错误集数'));
+    fs.writeFileSync(path.join(source, 'Show.S02E02.chs.srt'), SRT.replace('中文字幕', '错误季数'));
+    fs.writeFileSync(path.join(source, member), SRT);
+    const archive = path.join(app.root, 'episodes.zip');
+    assert.equal((await nativeExec('/usr/bin/bsdtar', ['--format', 'zip', '-cf', archive, '-C', source, '.'])).status, 0);
+    app.iina.http.download = async (_, dest) => fs.copyFileSync(archive, dest);
+    const paths = await app.provider.download(item);
+    assert.equal(fs.readFileSync(paths[0], 'utf8'), SRT, video + ' -> ' + member);
+  }
+});
+
+test('an archive containing only another episode is still rejected', async t => {
+  const app = runtime({ status: { url: 'file:///tmp/Show.S01.E02.1080p.mkv' }, downloadURL: 'https://dl.subhd.me/episodes.zip' });
+  t.after(app.cleanup);
+  const source = path.join(app.root, 'episodes');
+  fs.mkdirSync(source);
+  fs.writeFileSync(path.join(source, 'Show.S01E01.chs.srt'), SRT);
+  const archive = path.join(app.root, 'episodes.zip');
+  assert.equal((await nativeExec('/usr/bin/bsdtar', ['--format', 'zip', '-cf', archive, '-C', source, '.'])).status, 0);
+  app.iina.http.download = async (_, dest) => fs.copyFileSync(archive, dest);
+  await assert.rejects(app.provider.download(item), /没有可加载的中文字幕/);
 });

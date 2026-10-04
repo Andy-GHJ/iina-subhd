@@ -139,8 +139,8 @@
     return /(?:<title[^>]*>\s*(?:Just a moment|Attention Required|Access denied|人机验证|安全验证)|<(?:form|div)\b[^>]*\bid\s*=\s*["'](?:challenge-form|challenge-running|cf-challenge-running|cf-chl-widget)["'])/i.test(String(html || ""));
   }
 
-  function fetchSearchPage(site, query) {
-    var url = site + "/search/" + encodeURIComponent(query);
+  function fetchSearchPage(site, query, pageNumber) {
+    var url = site + "/search/" + encodeURIComponent(query) + (pageNumber > 1 ? "/" + pageNumber : "");
     return http.get(url, {
       headers: {
         "User-Agent": USER_AGENT,
@@ -158,6 +158,68 @@
         html: response.text || "",
       };
     });
+  }
+
+  function nextSearchPage(html, query, pageNumber) {
+    var anchors = /<a\b[^>]*>/gi;
+    var anchor;
+    while ((anchor = anchors.exec(html))) {
+      if (!/(?:^|\s)page-link(?:\s|$)/.test(getAttribute(anchor[0], "class"))) continue;
+      var path;
+      try { path = sitePath(getAttribute(anchor[0], "href")); } catch (_) { continue; }
+      var match = /^\/search\/([^/]+)\/([1-9]\d*)\/?$/.exec(path);
+      // Only follow the next consecutive page of this query. Previous pages,
+      // unrelated searches and arbitrary URLs cannot create a pagination loop.
+      if (match && decodePathPart(match[1]) === query && Number(match[2]) === pageNumber + 1) {
+        return pageNumber + 1;
+      }
+    }
+    return null;
+  }
+
+  function fetchSearchResults(site, query) {
+    var records = [];
+    var seen = {};
+    function load(pageNumber) {
+      return fetchSearchPage(site, query, pageNumber).then(function (page) {
+        extractResults(page.html, site).forEach(function (record) {
+          if (!seen[record.detailPath]) {
+            seen[record.detailPath] = true;
+            records.push(record);
+          }
+        });
+        var next = nextSearchPage(page.html, query, pageNumber);
+        return next ? load(next) : records;
+      });
+    }
+    return load(1);
+  }
+
+  function metadataRow(card) {
+    var match = /<div\b(?=[^>]*\bclass\s*=\s*["'][^"']*\btext-truncate\b)[^>]*>/i.exec(card);
+    if (!match) return "";
+    var start = match.index + match[0].length;
+    return card.slice(start, findClosingDiv(card, start));
+  }
+
+  function extractLanguage(card) {
+    var spans = /<span\b[^>]*>([\s\S]*?)<\/span>/gi;
+    var span;
+    var labels = [];
+    var metadata = metadataRow(card);
+    while ((span = spans.exec(metadata))) {
+      if (/(?:^|\s)fw-bold(?:\s|$)/.test(getAttribute(span[0].slice(0, span[0].indexOf(">") + 1), "class"))) {
+        labels.push(stripTags(span[1]));
+      }
+    }
+    var text = labels.join(" ");
+    // A bilingual flag alone need not involve Chinese. Titles, uploader names
+    // and source badges are not language metadata either.
+    if (!/(?:简体|簡體|繁体|繁體|简中|簡中|繁中|中文|汉语|漢語|中英|简英|簡英|繁英|简繁|簡繁|\bChinese\b)/i.test(text)) return "";
+    if (/(?:英文|英语|英語|\bEnglish\b|中英|简英|簡英|繁英)/i.test(text)) return "中英双语";
+    if (/(?:繁体|繁中|繁體)/i.test(text)) return "繁体中文";
+    if (/(?:简体|简中|簡體|簡中)/i.test(text)) return "简体中文";
+    return "中文字幕";
   }
 
   function extractResults(html, site) {
@@ -201,19 +263,9 @@
         continue;
       }
 
+      var language = extractLanguage(card);
+      if (!language) continue;
       var cardText = stripTags(card);
-      if (/(?:英文|英语|English)/i.test(cardText) && !/(?:简体|繁体|中文|中英|双语|简繁|Chinese)/i.test(cardText)) {
-        continue;
-      }
-
-      var language = "中文字幕";
-      if (/(?:双语|中英|简英|繁英)/i.test(cardText)) {
-        language = "中英双语";
-      } else if (/(?:繁体|繁中|繁體)/i.test(cardText)) {
-        language = "繁体中文";
-      } else if (/(?:简体|简中|簡體)/i.test(cardText)) {
-        language = "简体中文";
-      }
 
       var extensions = [];
       SUPPORTED_EXTENSIONS.forEach(function (extension) {
@@ -248,11 +300,11 @@
     var sources = [];
     // Source badges belong to the metadata row; a release title mentioning
     // "official" is not evidence that SubHD marked it as an official subtitle.
-    var metadata = /<div\b(?=[^>]*\bclass\s*=\s*["'][^"']*\btext-truncate\b)[^>]*>([\s\S]*?)<\/div>/i.exec(card);
+    var metadata = metadataRow(card);
     if (metadata) {
       var badges = /<span\b(?=[^>]*\bclass\s*=\s*["'][^"']*\brounded\b)[^>]*>([\s\S]*?)<\/span>/gi;
       var badge;
-      while ((badge = badges.exec(metadata[1]))) {
+      while ((badge = badges.exec(metadata))) {
         if (stripTags(badge[1]) === "官方字幕") sources.push("官方字幕");
       }
     }
@@ -274,10 +326,38 @@
   function cleanQuery(name) {
     return String(name || "")
       .replace(/\.(?:mkv|mp4|avi|mov|m4v|wmv|flv|ts|m2ts|webm)$/i, "")
+      .replace(/_/g, " ")
       .replace(/\b(?:2160p|1080p|720p|576p|480p|4k|8k|blu[ ._-]?ray|bdrip|brrip|web[ ._-]?dl|web[ ._-]?rip|hdtv|hdrip|remux|x264|x265|h[ ._-]?264|h[ ._-]?265|hevc|av1|aac|dts|truehd|ddp?\d?(?:\.\d)?|proper|repack)\b/gi, " ")
       .replace(/[._]+/g, " ")
       .replace(/\s+/g, " ")
       .trim();
+  }
+
+  function episodeInfo(name) {
+    var match = /(?:^|[^a-z0-9])(S(\d{1,2})[ ._-]*E(\d{1,3}))(?=$|[^a-z0-9])/i.exec(name);
+    return match ? {
+      season: Number(match[2]), episode: Number(match[3]),
+      index: match.index + match[0].length - match[1].length, length: match[1].length,
+    } : null;
+  }
+
+  function releaseInfo(name) {
+    var stem = String(name || "").replace(/\.(?:mkv|mp4|avi|mov|m4v|wmv|flv|ts|m2ts|webm)$/i, "");
+    var quality = /(?:^|[ ._\[(\-])(?:2160p|1080p|720p|576p|480p|4k|8k|blu[ ._-]?ray|bdrip|brrip|web[ ._-]?dl|web[ ._-]?rip|hdtv|hdrip|remux|x264|x265|hevc|av1)(?=$|[^a-z0-9])/i.exec(stem);
+    var end = quality ? quality.index : stem.length;
+    var titlePart = stem.slice(0, end);
+    var years = [];
+    var expression = /(?:^|[ ._\[(\-])((?:19|20)\d{2})(?=$|[ ._\])\-])/g;
+    var match;
+    while ((match = expression.exec(titlePart))) {
+      years.push({ value: match[1], start: match.index, index: match.index + match[0].length - match[1].length });
+    }
+    var year = years.length ? years[years.length - 1] : null;
+    if (year && (!cleanQuery(titlePart.slice(0, year.start)) ||
+        Number(year.value) > new Date().getFullYear() + 1 ||
+        /[^ ._\[\]()\-]/.test(titlePart.slice(year.index + 4)))) year = null;
+    if (year) year.ambiguous = years.length === 1 && !/[\[(]/.test(titlePart.charAt(year.index - 1));
+    return { stem: stem, end: end, year: year };
   }
 
   function searchQueries(title) {
@@ -288,15 +368,17 @@
         queries.push(value);
       }
     }
-    // Release names often leave a year, audio channels or uploader after
-    // cleaning. Search the movie/episode name before these release details.
-    var stem = title.replace(/\.(?:mkv|mp4|avi|mov|m4v|wmv|flv|ts|m2ts|webm)$/i, "");
-    var boundary = /(?:[ ._\[(\-]+(?:19\d{2}|20\d{2}|2160p|1080p|720p|480p|blu[ ._-]?ray|web[ ._-]?dl|b[dr]rip)\b)/i.exec(stem);
-    var episode = /\bS\d{1,2}[ ._-]*E\d{1,3}\b/i.exec(stem);
+    var release = releaseInfo(title);
+    var stem = release.stem;
+    var episode = episodeInfo(stem);
     if (episode) {
-      add(cleanQuery(stem.slice(0, episode.index + episode[0].length)));
-    } else if (boundary && boundary.index > 0) {
-      add(cleanQuery(stem.slice(0, boundary.index)));
+      add(cleanQuery(stem.slice(0, episode.index + episode.length)));
+    } else {
+      // With two numbers, the final release year follows the numeric title.
+      // A single unbracketed year may itself be part of the title: try the
+      // complete title first, and only broaden if it returns no Chinese rows.
+      if (!release.year || release.year.ambiguous) add(cleanQuery(stem.slice(0, release.end)));
+      if (release.year) add(cleanQuery(stem.slice(0, release.year.start)));
     }
     add(cleanQuery(stem));
     add(stem);
@@ -304,8 +386,10 @@
   }
 
   function resultScore(record, title) {
-    var year = /\b(?:19|20)\d{2}\b/.exec(title);
-    var score = year && record.title.indexOf(year[0]) !== -1 ? 10 : 0;
+    var year = releaseInfo(title).year;
+    var score = year && record.title.indexOf(year.value) !== -1 ? 10 : 0;
+    var query = searchQueries(title)[0];
+    if (query && cleanQuery(record.title).toLowerCase().indexOf(query.toLowerCase()) !== -1) score += 40;
     var part = /\b(?:vol(?:ume)?|part)[ ._-]*(\d+)\b/i.exec(title);
     var resultPart = /\b(?:vol(?:ume)?|part)[ ._-]*(\d+)\b/i.exec(record.title);
     if (part && resultPart) {
@@ -466,8 +550,10 @@
       }).map(function (name) {
         var ext = /\.([a-z]+)$/i.exec(name)[1].toLowerCase();
         var score = scoreFilename(name, ext) + resultScore({ title: name }, title);
-        var episode = /S\d{1,2}[ ._-]*E\d{1,3}/i.exec(title);
-        if (episode) score += name.toLowerCase().indexOf(episode[0].toLowerCase()) !== -1 ? 40 : -40;
+        var episode = episodeInfo(title);
+        var candidateEpisode = episodeInfo(name);
+        if (episode) score += candidateEpisode && candidateEpisode.season === episode.season &&
+          candidateEpisode.episode === episode.episode ? 40 : -40;
         return { name: name, extension: ext, score: score };
       }).sort(function (left, right) { return right.score - left.score; });
       if (!candidates.length) throw new Error("压缩包中没有 SRT、ASS、SSA 或 VTT 字幕");
@@ -574,8 +660,7 @@
         if (queryIndex >= queries.length) {
           return [];
         }
-        return fetchSearchPage(site, queries[queryIndex]).then(function (page) {
-          var records = extractResults(page.html, page.site);
+        return fetchSearchResults(site, queries[queryIndex]).then(function (records) {
           if (records.length) {
             records.sort(function (left, right) { return resultScore(right, title) - resultScore(left, title); });
             return records.map(function (record) {
