@@ -194,6 +194,40 @@ test('ambiguous release years fall back to the title after a precise search retu
   assert.deepEqual(app.calls.map(call => decodeURIComponent(call.url.split('/search/')[1])), ['Kill Bill Vol 2 2004', 'Kill Bill Vol 2']);
 });
 
+test('RM4K releases search clean titles and retain the release year for ranking', async t => {
+  for (const [name, query] of [
+    ['The Pianist (2002) RM4K (1080p BluRay x265 10bit Tigole).mkv', 'The Pianist'],
+    ['The.Pianist.2002.rm4k.1080p.BluRay.x265.mkv', 'The Pianist 2002'],
+    ['The_Pianist_2002_Rm4K_1080p_BluRay_x265.mkv', 'The Pianist 2002'],
+  ]) {
+    const app = runtime({ videoName: name, get: url => ({ statusCode: 200, text:
+      decodeURIComponent(url.split('/search/')[1]) === query
+        ? card({ id: 'WrongYear', title: 'The.Pianist.2023.BluRay' }) +
+          card({ id: 'Movie', title: 'The.Pianist.2002.BluRay' }) : '',
+    }) });
+    t.after(app.cleanup);
+    const items = await app.provider.search();
+    assert.deepEqual(app.calls.map(call => decodeURIComponent(call.url.split('/search/')[1])), [query], name);
+    assert.deepEqual(Array.from(items, item => item.data.detailPath), ['/a/Movie', '/a/WrongYear'], name);
+  }
+});
+
+test('RM4K is removed from cleaned fallback queries but not from longer title words', async t => {
+  const app = runtime({ videoName: 'The Pianist (2002) RM4K (1080p BluRay x265 10bit Tigole).mkv' });
+  t.after(app.cleanup);
+  await app.provider.search();
+  assert.deepEqual(app.calls.map(call => decodeURIComponent(call.url.split('/search/')[1])), [
+    'The Pianist',
+    'The Pianist (2002) ( 10bit Tigole)',
+    'The Pianist (2002) RM4K (1080p BluRay x265 10bit Tigole)',
+  ]);
+
+  const titleWord = runtime({ videoName: 'RM4King.2002.1080p.mkv', get: () => ({ statusCode: 200, text: card() }) });
+  t.after(titleWord.cleanup);
+  await titleWord.provider.search();
+  assert.equal(decodeURIComponent(titleWord.calls[0].url.split('/search/')[1]), 'RM4King 2002');
+});
+
 test('episode identifiers and numeric movie titles survive filename cleanup', async t => {
   for (const [name, query] of [['Show.Name.S02E03.1080p.WEB-DL.mkv', 'Show Name S02E03'], ['1917.2019.1080p.mkv', '1917']]) {
     const app = runtime({ status: { url: 'file:///tmp/' + name }, get: () => ({ statusCode: 200, text: card() }) });

@@ -327,7 +327,7 @@
     return String(name || "")
       .replace(/\.(?:mkv|mp4|avi|mov|m4v|wmv|flv|ts|m2ts|webm)$/i, "")
       .replace(/_/g, " ")
-      .replace(/\b(?:2160p|1080p|720p|576p|480p|4k|8k|blu[ ._-]?ray|bdrip|brrip|web[ ._-]?dl|web[ ._-]?rip|hdtv|hdrip|remux|remastered|x264|x265|h[ ._-]?264|h[ ._-]?265|hevc|av1|aac|dts|truehd|ddp?\d?(?:\.\d)?|proper|repack)\b/gi, " ")
+      .replace(/\b(?:2160p|1080p|720p|576p|480p|4k|8k|blu[ ._-]?ray|bdrip|brrip|web[ ._-]?dl|web[ ._-]?rip|hdtv|hdrip|remux|remastered|rm4k|x264|x265|h[ ._-]?264|h[ ._-]?265|hevc|av1|aac|dts|truehd|ddp?\d?(?:\.\d)?|proper|repack)\b/gi, " ")
       .replace(/[._]+/g, " ")
       .replace(/\s+/g, " ")
       .trim();
@@ -343,7 +343,7 @@
 
   function releaseInfo(name) {
     var stem = String(name || "").replace(/\.(?:mkv|mp4|avi|mov|m4v|wmv|flv|ts|m2ts|webm)$/i, "");
-    var quality = /(?:^|[ ._\[(\-])(?:2160p|1080p|720p|576p|480p|4k|8k|blu[ ._-]?ray|bdrip|brrip|web[ ._-]?dl|web[ ._-]?rip|hdtv|hdrip|remux|remastered|x264|x265|hevc|av1)(?=$|[^a-z0-9])/i.exec(stem);
+    var quality = /(?:^|[ ._\[(\-])(?:2160p|1080p|720p|576p|480p|4k|8k|blu[ ._-]?ray|bdrip|brrip|web[ ._-]?dl|web[ ._-]?rip|hdtv|hdrip|remux|remastered|rm4k|x264|x265|hevc|av1)(?=$|[^a-z0-9])/i.exec(stem);
     var end = quality ? quality.index : stem.length;
     var titlePart = stem.slice(0, end);
     var years = [];
