@@ -576,7 +576,70 @@
     });
   }
 
-  function downloadAtSite(site, data) {
+  function downloadVideoContext() {
+    var url = String((iina.core.status || {}).url || "");
+    var path = "";
+    if (/^file:\/\//i.test(url)) {
+      // IINA 1.5 removes percent encoding from core.status.url. Use mpv's
+      // original local path so literal %, # and ? in filenames stay intact.
+      var originalPath = String(iina.mpv.getString("path") || "");
+      if (originalPath.charAt(0) === "/" && !/[\x00]/.test(originalPath) && !/\/$/.test(originalPath)) {
+        path = originalPath;
+      }
+    }
+    return {
+      url: url,
+      path: path,
+      title: path ? path.slice(path.lastIndexOf("/") + 1).replace(/\.[^.]*$/, "") : getVideoSearchName(),
+    };
+  }
+
+  async function saveSubtitlesBesideVideo(paths, video, data) {
+    if (!/^file:\/\//i.test(video.url)) return paths;
+    try {
+      if (!video.path) throw new Error("无法确定影片的本地文件路径");
+      var stem = video.path.replace(/\.[^/.]+$/, "") + ".subhd." + subtitleID("", data.detailPath);
+      var saved = [];
+      for (var index = 0; index < paths.length; index += 1) {
+        var extension = /\.(srt|ass|ssa|vtt)$/i.exec(paths[index]);
+        if (!extension) throw new Error("无法确定字幕格式");
+        var prefix = stem + (paths.length > 1 ? "." + (index + 1) : "");
+        var target;
+        for (var attempt = 0; attempt < 100; attempt += 1) {
+          target = prefix + (attempt ? "." + attempt : "") + "." + extension[1].toLowerCase();
+          // Reuse identical files, otherwise report a name collision. Noclobber
+          // also protects files created between the existence check and open.
+          // Copy bytes through a file descriptor; never interpolate filenames.
+          var result = await utils.exec("/bin/sh", ["-c",
+            'if [ -e "$2" ] || [ -L "$2" ]; then\n' +
+            '  if [ ! -L "$2" ] && [ -f "$2" ] && /usr/bin/cmp -s "$1" "$2"; then exit 0; fi\n' +
+            '  exit 2\n' +
+            'fi\n' +
+            'set -C\n' +
+            'exec 3>"$2"\n' +
+            'if /bin/cat "$1" >&3; then exit 0; fi\n' +
+            '/bin/rm -f "$2"\n' +
+            'exit 1',
+            "subhd-save", paths[index], target]);
+          if (result && result.status === 0) break;
+          if (!result || result.status !== 2) {
+            throw new Error(result && result.stderr ? result.stderr.trim().slice(0, 240) : "复制字幕文件失败");
+          }
+        }
+        if (attempt === 100) throw new Error("字幕同名文件过多，无法自动保存");
+        saved.push(target);
+      }
+      return saved;
+    } catch (error) {
+      console.warn("SubHD 无法将字幕保存到影片目录：" + errorMessage(error));
+      if (String((iina.core.status || {}).url || "") === video.url) {
+        iina.core.osd("字幕已下载，但无法保存到影片目录；本次仍使用临时字幕。");
+      }
+      return paths;
+    }
+  }
+
+  function downloadAtSite(site, data, title) {
     var root = utils.resolvePath("@tmp/subhd-" + Date.now() + "-" + Math.random().toString(36).slice(2, 10));
     if (!root) return Promise.reject(new Error("IINA 无法提供插件临时目录"));
     var session = { site: site, root: root, jar: root + "/cookies.txt" };
@@ -610,7 +673,7 @@
       var download = validateDownloadURL(response.url);
       var path = root + "/subhd-" + sid + "." + download.extension;
       return http.download(download.url, path, { headers: { "User-Agent": USER_AGENT } }).then(function () {
-        return unpackSubtitle(session, path, download.extension, getVideoSearchName());
+        return unpackSubtitle(session, path, download.extension, title);
       });
     }).then(function (paths) {
       cleanup();
@@ -623,19 +686,22 @@
 
   async function downloadSubtitle(item) {
     var data = item.data;
+    // Capture the target before any requests: playback can change mid-download.
+    var video = downloadVideoContext();
     var sites = configuredSites();
     var source = normalizeSite(data.site);
     if (source) sites = [source].concat(sites.filter(function (site) { return site !== source; }));
     var errors = [];
     function trySite(index) {
-      return downloadAtSite(sites[index], data).catch(function (error) {
+      return downloadAtSite(sites[index], data, video.title).catch(function (error) {
         errors.push(sites[index] + "：" + errorMessage(error));
         console.warn(errors[errors.length - 1]);
         if (index + 1 < sites.length) return trySite(index + 1);
         throw new Error("SubHD 完整字幕下载失败。" + errors.join("；"));
       });
     }
-    return trySite(0);
+    var paths = await trySite(0);
+    return saveSubtitlesBesideVideo(paths, video, data);
   }
 
   async function search() {

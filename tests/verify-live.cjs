@@ -4,7 +4,7 @@ const { runtime, nativeExec } = require('./runtime.cjs');
 
 async function main() {
   const filename = process.argv[2] || 'Kill.Bill.Vol.2.2004.1080p.BrRIp.x264.YIFY.mp4';
-  const app = runtime({ status: { url: 'file:///tmp/' + encodeURIComponent(filename) } });
+  const app = runtime({ videoName: filename });
   app.iina.utils.exec = nativeExec;
   app.iina.http.get = async (url, options) => {
     const args = ['-sS', '-L', '--connect-timeout', '10', '--max-time', '30'];

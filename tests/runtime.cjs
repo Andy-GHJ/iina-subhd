@@ -1,6 +1,7 @@
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { fileURLToPath, pathToFileURL } = require('node:url');
 const vm = require('node:vm');
 const { execFile } = require('node:child_process');
 const { promisify } = require('node:util');
@@ -22,11 +23,19 @@ async function nativeExec(binary, args) {
 
 function runtime(options = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'subhd-test-'));
+  const videoPath = path.join(root, 'movies', path.basename(options.videoName || 'Kill.Bill.Vol.2.2004.1080p.BrRIp.x264.YIFY.mp4'));
+  fs.mkdirSync(path.dirname(videoPath));
+  fs.writeFileSync(videoPath, 'synthetic video');
   const calls = [];
   let provider;
   const prefs = { baseURL: 'https://subhd.tv', fallbackBaseURL: '', ...options.preferences };
   const iina = {
-    core: { status: { url: 'file:///tmp/Kill.Bill.Vol.2.2004.1080p.BrRIp.x264.YIFY.mp4', ...options.status } },
+    core: {
+      status: { url: pathToFileURL(videoPath).href, ...options.status },
+      osd: message => calls.push({ type: 'osd', message }),
+    },
+    mpv: { getString: key => key === 'path' && iina.core.status.url.startsWith('file://')
+      ? fileURLToPath(iina.core.status.url) : null },
     console: { log() {}, warn() {} },
     preferences: {
       get: key => prefs[key],
@@ -76,7 +85,7 @@ function runtime(options = {}) {
     },
   };
   vm.runInNewContext(script, { iina });
-  return { provider, calls, iina, root, cleanup: () => fs.rmSync(root, { recursive: true, force: true }) };
+  return { provider, calls, iina, root, videoPath, cleanup: () => fs.rmSync(root, { recursive: true, force: true }) };
 }
 
 function card({ id = 'Ab12', title = 'Kill.Bill.Vol.2.2004.BluRay', language = '简体 英语 双语', format = 'SRT', downloads = 1234,

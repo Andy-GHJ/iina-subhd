@@ -2,6 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const { pathToFileURL } = require('node:url');
 const { runtime, nativeExec, card, SRT } = require('./runtime.cjs');
 
 test('normal Cloudflare email protection does not block native search results', async t => {
@@ -214,6 +215,7 @@ test('complete download uses JSON and the same anonymous session, with no previe
   const app = runtime();
   t.after(app.cleanup);
   const paths = await app.provider.download(item);
+  assert.equal(paths[0], app.videoPath.replace(/\.[^.]+$/, '.subhd.Ab12.srt'));
   assert.equal(fs.readFileSync(paths[0], 'utf8'), SRT);
   const requests = app.calls.filter(c => c.binary === '/usr/bin/curl');
   assert.deepEqual(requests.map(c => new URL(c.args.at(-1)).pathname), ['/a/Ab12', '/api/sub/prepare-download', '/down/Ab12', '/api/sub/down']);
@@ -224,6 +226,95 @@ test('complete download uses JSON and the same anonymous session, with no previe
     assert.equal(request.args[request.args.indexOf('--data') + 1], '{"sid":"Ab12"}');
     assert.ok(request.args.includes('Content-Type: application/json'));
   }
+  // Simulate IINA clearing the download session on exit. The saved subtitle
+  // must survive independently of the temporary files and network session.
+  fs.rmSync(path.dirname(jars[0]), { recursive: true });
+  assert.equal(fs.readFileSync(paths[0], 'utf8'), SRT);
+  assert.equal(app.calls.filter(c => c.type === 'osd').length, 0);
+});
+
+test('all supported subtitle formats are saved beside the video without re-encoding', async t => {
+  for (const [extension, text] of [
+    ['srt', SRT], ['ass', '[Script Info]\nTitle: 中文字幕\n[Events]\n'],
+    ['ssa', '[Script Info]\nTitle: 中文字幕\n[Events]\n'], ['vtt', 'WEBVTT\n\n00:01.000 --> 00:03.000\n中文字幕\n'],
+  ]) {
+    const bytes = Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(text, 'utf16le')]);
+    const app = runtime({ contents: bytes, downloadURL: `https://dl.subhd.me/subtitle.${extension}` });
+    t.after(app.cleanup);
+    const paths = await app.provider.download(item);
+    assert.equal(path.dirname(paths[0]), path.dirname(app.videoPath));
+    assert.equal(path.extname(paths[0]), '.' + extension);
+    assert.deepEqual(fs.readFileSync(paths[0]), bytes);
+  }
+});
+
+test('saving uses the original path even when IINA exposes a decoded URL with special characters', async t => {
+  const app = runtime({ videoName: "电影 [1999] #100%20? $(echo injected) ' ` ;.mkv" });
+  t.after(app.cleanup);
+  app.iina.core.status.url = 'file://' + app.videoPath;
+  app.iina.mpv.getString = key => key === 'path' ? app.videoPath : null;
+  const paths = await app.provider.download(item);
+  assert.equal(paths[0], app.videoPath.replace(/\.mkv$/, '.subhd.Ab12.srt'));
+  assert.equal(fs.readFileSync(paths[0], 'utf8'), SRT);
+  assert.deepEqual(fs.readdirSync(path.dirname(app.videoPath)).sort(), [path.basename(app.videoPath), path.basename(paths[0])].sort());
+});
+
+test('different existing subtitles are preserved and identical downloads reuse the saved file', async t => {
+  const app = runtime();
+  t.after(app.cleanup);
+  const ordinary = app.videoPath.replace(/\.[^.]+$/, '.srt');
+  const existing = app.videoPath.replace(/\.[^.]+$/, '.subhd.Ab12.srt');
+  const original = SRT.replace('中文字幕', '已有字幕');
+  fs.writeFileSync(ordinary, original);
+  fs.writeFileSync(existing, original);
+  const [first] = await app.provider.download(item);
+  assert.equal(first, existing.replace(/\.srt$/, '.1.srt'));
+  assert.equal(fs.readFileSync(first, 'utf8'), SRT);
+  assert.equal(fs.readFileSync(ordinary, 'utf8'), original);
+  assert.equal(fs.readFileSync(existing, 'utf8'), original);
+  const [second] = await app.provider.download(item);
+  assert.equal(second, first);
+  assert.equal(fs.readdirSync(path.dirname(app.videoPath)).filter(name => name.endsWith('.srt')).length, 3);
+});
+
+test('existing symlinks and directories are skipped without modifying their targets', async t => {
+  const app = runtime();
+  t.after(app.cleanup);
+  const existing = app.videoPath.replace(/\.[^.]+$/, '.subhd.Ab12.srt');
+  const linked = path.join(app.root, 'user-subtitle.srt');
+  fs.writeFileSync(linked, SRT);
+  fs.symlinkSync(linked, existing);
+  const directory = existing.replace(/\.srt$/, '.1.srt');
+  fs.mkdirSync(directory);
+  const [saved] = await app.provider.download(item);
+  assert.equal(saved, existing.replace(/\.srt$/, '.2.srt'));
+  assert.equal(fs.lstatSync(existing).isSymbolicLink(), true);
+  assert.equal(fs.readFileSync(linked, 'utf8'), SRT);
+  assert.deepEqual(fs.readdirSync(directory), []);
+});
+
+test('a read-only movie directory warns and retains the temporary subtitle without retrying a mirror', async t => {
+  if (process.getuid() === 0) return t.skip('root can write through directory permissions');
+  const app = runtime({ preferences: { fallbackBaseURL: 'https://subhd.me' } });
+  const directory = path.dirname(app.videoPath);
+  t.after(() => { fs.chmodSync(directory, 0o755); app.cleanup(); });
+  fs.chmodSync(directory, 0o555);
+  const [temporary] = await app.provider.download(item);
+  assert.notEqual(path.dirname(temporary), directory);
+  assert.equal(fs.readFileSync(temporary, 'utf8'), SRT);
+  assert.deepEqual(fs.readdirSync(directory), [path.basename(app.videoPath)]);
+  assert.equal(app.calls.filter(c => c.binary === '/usr/bin/curl').length, 4);
+  assert.match(app.calls.find(c => c.type === 'osd').message, /无法保存到影片目录/);
+});
+
+test('online videos keep temporary subtitles without trying to save beside a URL', async t => {
+  const app = runtime({ status: { url: 'https://example.com/movie.mp4', title: 'Movie' } });
+  t.after(app.cleanup);
+  app.iina.mpv.getString = () => { throw new Error('online videos have no local movie path'); };
+  const [temporary] = await app.provider.download(item);
+  assert.equal(fs.readFileSync(temporary, 'utf8'), SRT);
+  assert.equal(app.calls.some(c => c.args && c.args[3] === 'subhd-save'), false);
+  assert.equal(app.calls.filter(c => c.type === 'osd').length, 0);
 });
 
 test('HTML disguised as a subtitle is rejected', async t => {
@@ -274,7 +365,7 @@ test('archive episode matching compares season and episode numbers across separa
     ['Show.S01E02.1080p.mkv', 'Show.S1-E2.chs.srt'],
     ['Show.S1 E2.1080p.mkv', 'Show.S01_E002.chs.srt'],
   ]) {
-    const app = runtime({ status: { url: 'file:///tmp/' + encodeURIComponent(video) }, downloadURL: 'https://dl.subhd.me/episodes.zip' });
+    const app = runtime({ videoName: video, downloadURL: 'https://dl.subhd.me/episodes.zip' });
     t.after(app.cleanup);
     const source = path.join(app.root, 'episodes');
     fs.mkdirSync(source);
@@ -290,7 +381,7 @@ test('archive episode matching compares season and episode numbers across separa
 });
 
 test('an archive containing only another episode is still rejected', async t => {
-  const app = runtime({ status: { url: 'file:///tmp/Show.S01.E02.1080p.mkv' }, downloadURL: 'https://dl.subhd.me/episodes.zip' });
+  const app = runtime({ videoName: 'Show.S01.E02.1080p.mkv', downloadURL: 'https://dl.subhd.me/episodes.zip' });
   t.after(app.cleanup);
   const source = path.join(app.root, 'episodes');
   fs.mkdirSync(source);
@@ -299,4 +390,24 @@ test('an archive containing only another episode is still rejected', async t => 
   assert.equal((await nativeExec('/usr/bin/bsdtar', ['--format', 'zip', '-cf', archive, '-C', source, '.'])).status, 0);
   app.iina.http.download = async (_, dest) => fs.copyFileSync(archive, dest);
   await assert.rejects(app.provider.download(item), /没有可加载的中文字幕/);
+});
+
+test('switching movies mid-download keeps archive matching and saving tied to the original video', async t => {
+  const app = runtime({ videoName: 'Show.S01E02.mkv', downloadURL: 'https://dl.subhd.me/episodes.zip' });
+  t.after(app.cleanup);
+  const source = path.join(app.root, 'episodes');
+  fs.mkdirSync(source);
+  fs.writeFileSync(path.join(source, 'Show.S01E02.chs.srt'), SRT);
+  fs.writeFileSync(path.join(source, 'Show.S01E03.chs.srt'), SRT.replace('中文字幕', '另一集字幕'));
+  const archive = path.join(app.root, 'episodes.zip');
+  assert.equal((await nativeExec('/usr/bin/bsdtar', ['--format', 'zip', '-cf', archive, '-C', source, '.'])).status, 0);
+  const nextVideo = path.join(path.dirname(app.videoPath), 'Show.S01E03.mkv');
+  app.iina.http.download = async (_, dest) => {
+    fs.copyFileSync(archive, dest);
+    app.iina.core.status.url = pathToFileURL(nextVideo).href;
+  };
+  const [saved] = await app.provider.download(item);
+  assert.equal(saved, app.videoPath.replace(/\.mkv$/, '.subhd.Ab12.srt'));
+  assert.equal(fs.readFileSync(saved, 'utf8'), SRT);
+  assert.equal(fs.existsSync(nextVideo.replace(/\.mkv$/, '.subhd.Ab12.srt')), false);
 });

@@ -25,6 +25,10 @@ Alternatively, download the `.iinaplgz` package from [Releases](https://github.c
 1. Select **SubHD 中文字幕** as the online subtitle provider in IINA's subtitle settings.
 2. Start playback, open the online subtitle search, and select a matching subtitle to download.
 
+For local videos, subtitles are automatically saved beside the video, for example `Movie.mkv` and `Movie.subhd.Ab12.srt`, preserving the original format and encoding. Identical files are reused; conflicting files get a numbered suffix instead of being overwritten. Enable IINA's subtitle auto-loading option that matches subtitles containing the video filename to load them when reopening the video.
+
+If the video directory is not writable, the plugin displays a warning and keeps using the temporary subtitle for the current session. Online videos also use temporary subtitles.
+
 The plugin preferences default to `https://subhd.tv` as the primary site and `https://subhd.me` as the fallback. Leave the fallback empty to disable it.
 
 ## Development
